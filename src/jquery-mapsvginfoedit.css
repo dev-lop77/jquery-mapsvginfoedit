@@ -1,0 +1,111 @@
+/**
+ * jquery-mapsvginfoedit v0.3.0 — styles
+ */
+
+/* Container */
+.msie-container {
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+/* Inner wrapper (holds img + svg, receives transform) */
+.msie-wrap {
+  position: relative;
+  display: inline-block;
+  transform-origin: 0 0;
+}
+
+/* Base image */
+.msie-img {
+  display: block;
+}
+
+/* SVG overlay — sits exactly on top of the image */
+.msie-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: all;
+}
+
+/* Markers & Areas */
+.msie-marker,
+.msie-area {
+  transition: opacity 0.15s;
+}
+.msie-marker:hover,
+.msie-area:hover {
+  opacity: 0.8;
+}
+
+/* Resize handles */
+.msie-handle {
+  pointer-events: all;
+}
+
+/* Zoom buttons */
+.msie-zoom {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #aaa;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 18px;
+  line-height: 30px;
+  text-align: center;
+  cursor: pointer;
+  z-index: 10;
+  color: #333;
+  padding: 0;
+}
+.msie-zoom:hover {
+  background: #eee;
+}
+.msie-zoom-in {
+  right: 10px;
+  top: 10px;
+}
+.msie-zoom-out {
+  right: 10px;
+  top: 48px;
+}
+.msie-zoom-fit {
+  right: 10px;
+  top: 86px;
+  font-size: 16px;
+}
+
+/* Add-item popover */
+.msie-popover {
+  position: absolute;
+  display: flex;
+  gap: 4px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 4px 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  z-index: 20;
+  transform: translateX(-50%);
+}
+.msie-pop-btn {
+  width: 36px;
+  height: 36px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fafafa;
+  cursor: pointer;
+  padding: 0;
+  color: #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.msie-pop-btn:hover {
+  background: #e8e8e8;
+  border-color: #999;
+}

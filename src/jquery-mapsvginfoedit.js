@@ -1,0 +1,768 @@
+/**
+ * jquery-mapsvginfoedit v0.3.0
+ * Interactive SVG marker and area editor overlay for static images
+ * (c) 2026 — MIT License
+ */
+(function($) {
+  'use strict';
+
+  var DEFAULTS = {
+    // Zoom
+    zoomMin: 0.5,
+    zoomMax: 4,
+    zoomStep: 0.25,
+    zoomInitial: 1,
+    // Markers
+    markerSize: 20,
+    markerColor: '#e74c3c',
+    markerDraggable: true,
+    // Areas
+    areaMinSize: 20,
+    areaFillColor: 'rgba(52,152,219,0.3)',
+    areaStrokeColor: '#2980b9',
+    areaStrokeWidth: 2,
+    areaDraggable: true,
+    areaResizable: true,
+    // Defaults for new areas placed via popover
+    areaDefaultWidth: 80,
+    areaDefaultHeight: 60,
+    // Callbacks
+    onClick: null,   // function(item)
+    onAdd: null,     // function(item)
+    onModify: null   // function(item)
+  };
+
+  var HANDLE_SIZE = 8;
+  var DRAG_THRESHOLD = 5;
+  var POPOVER_OFFSET_Y = 45;
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  var VALID_TYPES = { circle: 1, square: 1, pin: 1, area: 1 };
+
+  // ── Helpers ──────────────────────────────────────────────
+
+  function randomId() {
+    return 'xxxxxxxx'.replace(/x/g, function() {
+      return (Math.random() * 16 | 0).toString(16);
+    });
+  }
+
+  function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+  function clearChildren(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  // ── Constructor ──────────────────────────────────────────
+
+  function MapSvgInfoEdit(container, options) {
+    this.opts = $.extend({}, DEFAULTS, options);
+    this.$container = $(container).addClass('msie-container');
+    this.items = [];       // {id, type, x, y, [w, h]}  image-native coords
+    this.zoom = (this.opts.zoomInitial === 'fit') ? 1 : this.opts.zoomInitial;
+    this.panX = 0;
+    this.panY = 0;
+    this._selected = null;
+    this._panState = null;   // {startX, startY, origPanX, origPanY, moved}
+    this._itemDrag = null;   // {item, draggable, startX, startY, origX, origY, moved}
+    this._resize = null;
+    this._imgW = 0;
+    this._imgH = 0;
+    this._popoverDismissedAt = 0;
+    this._popoverCloseHandler = null;
+    this._clickTimer = null;
+    this._init();
+  }
+
+  var proto = MapSvgInfoEdit.prototype;
+
+  // ── Initialisation ───────────────────────────────────────
+
+  proto._init = function() {
+    var self = this;
+
+    // Wrapper
+    this.$wrap = $('<div class="msie-wrap"></div>').appendTo(this.$container);
+
+    // Image
+    var imgSrc = this.opts.src || this.$container.data('src') || '';
+    this.$img = $('<img class="msie-img" draggable="false">').attr('src', imgSrc).appendTo(this.$wrap);
+
+    // SVG overlay (created after image loads so we know dimensions)
+    this.$img.on('load', function() {
+      self._imgW = this.naturalWidth;
+      self._imgH = this.naturalHeight;
+      self._createSvg();
+      if (self.opts.zoomInitial === 'fit') {
+        self.zoomFit();
+      } else {
+        self._applyTransform();
+      }
+      self._renderAll();
+    });
+
+    // If image already cached
+    if (this.$img[0].complete && this.$img[0].naturalWidth) {
+      this.$img.trigger('load');
+    }
+
+    // Zoom buttons
+    this.$zoomIn  = $('<button type="button" class="msie-zoom msie-zoom-in" title="Zoom in">+</button>').appendTo(this.$container);
+    this.$zoomOut = $('<button type="button" class="msie-zoom msie-zoom-out" title="Zoom out">&minus;</button>').appendTo(this.$container);
+    this.$zoomFit = $('<button type="button" class="msie-zoom msie-zoom-fit" title="Fit to width">&#8596;</button>').appendTo(this.$container);
+    this.$zoomIn.on('click', function() { self.zoomBy(self.opts.zoomStep); });
+    this.$zoomOut.on('click', function() { self.zoomBy(-self.opts.zoomStep); });
+    this.$zoomFit.on('click', function() { self.zoomFit(); });
+
+    // Pointer events on container for pan + interactions
+    this._bindPointer();
+  };
+
+  proto._createSvg = function() {
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', 'msie-svg');
+    svg.setAttribute('width', this._imgW);
+    svg.setAttribute('height', this._imgH);
+    svg.setAttribute('viewBox', '0 0 ' + this._imgW + ' ' + this._imgH);
+    this.$wrap[0].appendChild(svg);
+    this.svg = svg;
+
+    // Groups: areas below markers
+    this.gAreas = document.createElementNS(SVG_NS, 'g');
+    this.gAreas.setAttribute('class', 'msie-g-areas');
+    svg.appendChild(this.gAreas);
+
+    this.gMarkers = document.createElementNS(SVG_NS, 'g');
+    this.gMarkers.setAttribute('class', 'msie-g-markers');
+    svg.appendChild(this.gMarkers);
+
+    this.gHandles = document.createElementNS(SVG_NS, 'g');
+    this.gHandles.setAttribute('class', 'msie-g-handles');
+    svg.appendChild(this.gHandles);
+  };
+
+  // ── Coordinate conversion ────────────────────────────────
+
+  /** Screen (client) coords → image-native coords */
+  proto._toImage = function(clientX, clientY) {
+    var rect = this.$wrap[0].getBoundingClientRect();
+    var sx = (clientX - rect.left) / this.zoom - this.panX / this.zoom;
+    var sy = (clientY - rect.top)  / this.zoom - this.panY / this.zoom;
+    return { x: sx, y: sy };
+  };
+
+  // ── Zoom / Pan ───────────────────────────────────────────
+
+  proto.zoomBy = function(delta) {
+    this.zoom = clamp(this.zoom + delta, this.opts.zoomMin, this.opts.zoomMax);
+    this._applyTransform();
+  };
+
+  proto.zoomTo = function(level) {
+    this.zoom = clamp(level, this.opts.zoomMin, this.opts.zoomMax);
+    this._applyTransform();
+  };
+
+  proto.zoomFit = function() {
+    if (!this._imgW) return;
+    var containerW = this.$container.width();
+    this.zoom = clamp(containerW / this._imgW, this.opts.zoomMin, this.opts.zoomMax);
+    this.panX = 0;
+    this.panY = 0;
+    this._applyTransform();
+  };
+
+  proto._applyTransform = function() {
+    var t = 'translate(' + this.panX + 'px,' + this.panY + 'px) scale(' + this.zoom + ')';
+    this.$wrap.css('transform', t);
+  };
+
+  // ── Event helpers ────────────────────────────────────────
+
+  proto._fire = function(eventName, item) {
+    var cb = this.opts[eventName];
+    if (cb) cb(this._exportItem(item));
+  };
+
+  // ── Rendering ────────────────────────────────────────────
+
+  proto._renderAll = function() {
+    if (!this.svg) return;
+    clearChildren(this.gAreas);
+    clearChildren(this.gMarkers);
+    clearChildren(this.gHandles);
+
+    for (var i = 0; i < this.items.length; i++) {
+      this._renderItem(this.items[i]);
+    }
+    if (this._selected) this._renderHandles(this._selected);
+  };
+
+  proto._renderItem = function(item) {
+    var el;
+    if (item.type === 'area') {
+      el = this._createArea(item);
+      this.gAreas.appendChild(el);
+    } else {
+      el = this._createMarker(item);
+      if (!el) return; // unknown type guard
+      this.gMarkers.appendChild(el);
+    }
+    item._el = el;
+  };
+
+  proto._createMarker = function(item) {
+    var s = item.size || this.opts.markerSize;
+    var color = item.color || this.opts.markerColor;
+    var el;
+
+    if (item.type === 'circle') {
+      el = document.createElementNS(SVG_NS, 'circle');
+      el.setAttribute('cx', item.x);
+      el.setAttribute('cy', item.y);
+      el.setAttribute('r', s / 2);
+      el.setAttribute('fill', color);
+    } else if (item.type === 'square') {
+      el = document.createElementNS(SVG_NS, 'rect');
+      el.setAttribute('x', item.x - s / 2);
+      el.setAttribute('y', item.y - s / 2);
+      el.setAttribute('width', s);
+      el.setAttribute('height', s);
+      el.setAttribute('fill', color);
+    } else if (item.type === 'pin') {
+      // Google Maps-style pin — same path as toolbar icon
+      var scale = s / 12;
+      el = document.createElementNS(SVG_NS, 'g');
+      el.setAttribute('transform',
+        'translate(' + item.x + ',' + item.y + ') scale(' + scale + ')');
+      var path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', 'M0,-20C-3.87,-20 -7,-16.87 -7,-13c0,5.25 7,13 7,13s7-7.75 7-13c0-3.87-3.13-7-7-7z');
+      path.setAttribute('fill', color);
+      el.appendChild(path);
+      var dot = document.createElementNS(SVG_NS, 'circle');
+      dot.setAttribute('cx', 0);
+      dot.setAttribute('cy', -13);
+      dot.setAttribute('r', 2.5);
+      dot.setAttribute('fill', '#fff');
+      el.appendChild(dot);
+    } else {
+      return null; // Q3: unknown type — skip silently
+    }
+
+    el.setAttribute('class', 'msie-marker');
+    el.setAttribute('data-id', item.id);
+    el.style.cursor = 'pointer';
+    return el;
+  };
+
+  /** Update an existing SVG element's position in-place (used during drag) */
+  proto._updateItemEl = function(item) {
+    var el = item._el;
+    if (!el) return;
+    var s = item.size || this.opts.markerSize;
+
+    if (item.type === 'circle') {
+      el.setAttribute('cx', item.x);
+      el.setAttribute('cy', item.y);
+    } else if (item.type === 'square') {
+      el.setAttribute('x', item.x - s / 2);
+      el.setAttribute('y', item.y - s / 2);
+    } else if (item.type === 'pin') {
+      var scale = s / 12;
+      el.setAttribute('transform',
+        'translate(' + item.x + ',' + item.y + ') scale(' + scale + ')');
+    } else if (item.type === 'area') {
+      el.setAttribute('x', item.x);
+      el.setAttribute('y', item.y);
+      el.setAttribute('width', item.w);
+      el.setAttribute('height', item.h);
+    }
+  };
+
+  proto._createArea = function(item) {
+    var el = document.createElementNS(SVG_NS, 'rect');
+    el.setAttribute('x', item.x);
+    el.setAttribute('y', item.y);
+    el.setAttribute('width', item.w);
+    el.setAttribute('height', item.h);
+    el.setAttribute('fill', item.fillColor || this.opts.areaFillColor);
+    el.setAttribute('stroke', item.strokeColor || this.opts.areaStrokeColor);
+    el.setAttribute('stroke-width', item.strokeWidth || this.opts.areaStrokeWidth);
+    el.setAttribute('class', 'msie-area');
+    el.setAttribute('data-id', item.id);
+    el.style.cursor = 'pointer';
+    return el;
+  };
+
+  // ── Resize handles for areas ─────────────────────────────
+
+  proto._renderHandles = function(item) {
+    clearChildren(this.gHandles);
+    if (item.type !== 'area' || !this.opts.areaResizable) return;
+
+    var hs = HANDLE_SIZE / this.zoom; // constant visual size
+    var positions = this._handlePositions(item, hs);
+    for (var i = 0; i < positions.length; i++) {
+      var p = positions[i];
+      var rect = document.createElementNS(SVG_NS, 'rect');
+      rect.setAttribute('x', p.x - hs / 2);
+      rect.setAttribute('y', p.y - hs / 2);
+      rect.setAttribute('width', hs);
+      rect.setAttribute('height', hs);
+      rect.setAttribute('fill', '#fff');
+      rect.setAttribute('stroke', '#333');
+      rect.setAttribute('stroke-width', 1 / this.zoom);
+      rect.setAttribute('class', 'msie-handle');
+      rect.setAttribute('data-handle', p.dir);
+      rect.style.cursor = p.cursor;
+      this.gHandles.appendChild(rect);
+    }
+  };
+
+  proto._handlePositions = function(item, hs) {
+    var x = item.x, y = item.y, w = item.w, h = item.h;
+    return [
+      { x: x,         y: y,         dir: 'nw', cursor: 'nwse-resize' },
+      { x: x + w / 2, y: y,         dir: 'n',  cursor: 'ns-resize'   },
+      { x: x + w,     y: y,         dir: 'ne', cursor: 'nesw-resize' },
+      { x: x + w,     y: y + h / 2, dir: 'e',  cursor: 'ew-resize'   },
+      { x: x + w,     y: y + h,     dir: 'se', cursor: 'nwse-resize' },
+      { x: x + w / 2, y: y + h,     dir: 's',  cursor: 'ns-resize'   },
+      { x: x,         y: y + h,     dir: 'sw', cursor: 'nesw-resize' },
+      { x: x,         y: y + h / 2, dir: 'w',  cursor: 'ew-resize'   }
+    ];
+  };
+
+  // ── Pointer events (mouse + touch) ──────────────────────
+
+  proto._bindPointer = function() {
+    var self = this;
+    var pointerDown = null; // {clientX, clientY, time, target}
+    var ns = '.msie'; // event namespace
+
+    this.$container.on('pointerdown' + ns, function(e) {
+      // Ignore zoom buttons
+      if ($(e.target).hasClass('msie-zoom')) return;
+
+      e.preventDefault();
+      pointerDown = {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        time: Date.now(),
+        target: e.target
+      };
+
+      // Check if it's a resize handle
+      var handleDir = $(e.target).attr('data-handle');
+      if (handleDir && self._selected && self._selected.type === 'area') {
+        self._resize = {
+          item: self._selected,
+          dir: handleDir,
+          startX: e.clientX,
+          startY: e.clientY,
+          origX: self._selected.x,
+          origY: self._selected.y,
+          origW: self._selected.w,
+          origH: self._selected.h
+        };
+        return;
+      }
+
+      // Check if target is an item
+      var $el = $(e.target).closest('.msie-marker, .msie-area');
+      if ($el.length) {
+        var itemId = $el.attr('data-id');
+        var item = self._findItem(itemId);
+        if (item) {
+          var draggable = item.type === 'area' ? self.opts.areaDraggable : self.opts.markerDraggable;
+          if (item.draggable !== undefined) draggable = item.draggable;
+          self._itemDrag = {
+            item: item,
+            draggable: draggable,
+            startX: e.clientX,
+            startY: e.clientY,
+            origX: item.x,
+            origY: item.y,
+            moved: false
+          };
+        }
+        return;
+      }
+
+      // Otherwise: pan
+      self._panState = {
+        startX: e.clientX,
+        startY: e.clientY,
+        origPanX: self.panX,
+        origPanY: self.panY,
+        moved: false
+      };
+    });
+
+    $(document).on('pointermove' + ns, function(e) {
+      if (!pointerDown) return;
+
+      // Resize
+      if (self._resize) {
+        e.preventDefault();
+        self._doResize(e);
+        return;
+      }
+
+      var dx, dy, dist;
+
+      // Item drag
+      if (self._itemDrag) {
+        dx = e.clientX - self._itemDrag.startX;
+        dy = e.clientY - self._itemDrag.startY;
+        dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist >= DRAG_THRESHOLD) self._itemDrag.moved = true;
+        if (self._itemDrag.moved && self._itemDrag.draggable) {
+          e.preventDefault();
+          var item = self._itemDrag.item;
+          item.x = self._itemDrag.origX + dx / self.zoom;
+          item.y = self._itemDrag.origY + dy / self.zoom;
+          self._updateItemEl(item);
+          if (self._selected && self._selected.id === item.id) {
+            self._renderHandles(item);
+          }
+        }
+        return;
+      }
+
+      // Pan
+      if (self._panState) {
+        dx = e.clientX - self._panState.startX;
+        dy = e.clientY - self._panState.startY;
+        dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist >= DRAG_THRESHOLD) self._panState.moved = true;
+        if (self._panState.moved) {
+          e.preventDefault();
+          self.panX = self._panState.origPanX + dx;
+          self.panY = self._panState.origPanY + dy;
+          self._applyTransform();
+        }
+      }
+    });
+
+    $(document).on('pointerup' + ns, function(e) {
+      if (!pointerDown) return;
+
+      // Resize end
+      if (self._resize) {
+        var ri = self._resize.item;
+        self._resize = null;
+        self._renderAll();
+        self._fire('onModify', ri);
+        pointerDown = null;
+        return;
+      }
+
+      // Item drag end
+      if (self._itemDrag && self._itemDrag.moved) {
+        var dragItem = self._itemDrag.item;
+        self._itemDrag = null;
+        pointerDown = null;
+        self._fire('onModify', dragItem);
+        return;
+      }
+
+      var wasPan = self._panState && self._panState.moved;
+      self._panState = null;
+      self._itemDrag = null;
+
+      if (wasPan) {
+        pointerDown = null;
+        return;
+      }
+
+      // It was a click/tap (no drag)
+      var $el = $(pointerDown.target).closest('.msie-marker, .msie-area');
+      if ($el.length) {
+        var itemId = $el.attr('data-id');
+        var clickedItem = self._findItem(itemId);
+        if (clickedItem) {
+          if (clickedItem.type === 'area') {
+            // Areas: delay onClick to allow dblclick to cancel it
+            clearTimeout(self._clickTimer);
+            self._clickTimer = setTimeout(function() {
+              self._fire('onClick', clickedItem);
+            }, 250);
+          } else {
+            // Markers: fire onClick immediately
+            self._fire('onClick', clickedItem);
+          }
+        }
+      } else if (self._selected) {
+        // Click outside while in edit mode → exit edit mode
+        self._selected = null;
+        self._renderAll();
+      } else if (!$(pointerDown.target).hasClass('msie-zoom') && !$(pointerDown.target).closest('.msie-popover').length) {
+        // Click on empty space (not in edit mode) → show add popover
+        if (Date.now() - self._popoverDismissedAt > 200) {
+          self._showPopover(e.clientX, e.clientY);
+        }
+      }
+
+      pointerDown = null;
+    });
+
+    // Double-click/double-tap → enter edit mode (resize handles) for areas
+    this.$container.on('dblclick' + ns, function(e) {
+      clearTimeout(self._clickTimer); // cancel pending single-click
+      var $el = $(e.target).closest('.msie-area');
+      if (!$el.length) return;
+      var itemId = $el.attr('data-id');
+      var item = self._findItem(itemId);
+      if (item && item.type === 'area') {
+        self._selected = item;
+        self._renderAll();
+      }
+    });
+
+    // Prevent context menu on long press
+    this.$container.on('contextmenu' + ns, function(e) { e.preventDefault(); });
+  };
+
+  // ── Resize logic ─────────────────────────────────────────
+
+  proto._doResize = function(e) {
+    var r = this._resize;
+    var dx = (e.clientX - r.startX) / this.zoom;
+    var dy = (e.clientY - r.startY) / this.zoom;
+    var dir = r.dir;
+    var min = this.opts.areaMinSize;
+
+    var x = r.origX, y = r.origY, w = r.origW, h = r.origH;
+
+    if (dir.indexOf('e') >= 0) w = Math.max(min, r.origW + dx);
+    if (dir.indexOf('s') >= 0) h = Math.max(min, r.origH + dy);
+    if (dir.indexOf('w') >= 0) {
+      var newW = Math.max(min, r.origW - dx);
+      x = r.origX + (r.origW - newW);
+      w = newW;
+    }
+    if (dir.indexOf('n') >= 0) {
+      var newH = Math.max(min, r.origH - dy);
+      y = r.origY + (r.origH - newH);
+      h = newH;
+    }
+
+    r.item.x = x;
+    r.item.y = y;
+    r.item.w = w;
+    r.item.h = h;
+    this._updateItemEl(r.item);
+    this._renderHandles(r.item);
+  };
+
+  // ── Add-item popover ─────────────────────────────────────
+
+  proto._showPopover = function(clientX, clientY) {
+    this._hidePopover();
+    if (!this.svg) return;
+
+    var self = this;
+    var pos = this._toImage(clientX, clientY);
+
+    var $pop = $('<div class="msie-popover"></div>');
+    var pinSvg = '<svg viewBox="0 0 24 24" width="20" height="20" style="display:block">' +
+      '<path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#e74c3c"/>' +
+      '<circle cx="12" cy="9" r="2.5" fill="#fff"/></svg>';
+    var types = [
+      { type: 'area',   label: '<svg viewBox="0 0 24 24" width="18" height="18" style="display:block"><rect x="3" y="5" width="18" height="14" rx="1" fill="none" stroke="#333" stroke-width="2"/></svg>', title: 'Rectangle area' },
+      { type: 'circle', label: '<svg viewBox="0 0 24 24" width="18" height="18" style="display:block"><circle cx="12" cy="12" r="8" fill="#333"/></svg>', title: 'Circle marker'  },
+      { type: 'square', label: '<svg viewBox="0 0 24 24" width="18" height="18" style="display:block"><rect x="4" y="4" width="16" height="16" fill="#333"/></svg>', title: 'Square marker'  },
+      { type: 'pin',    label: pinSvg, title: 'Pin marker' }
+    ];
+
+    for (var i = 0; i < types.length; i++) {
+      (function(t) {
+        var $btn = $('<button type="button" class="msie-pop-btn" title="' + t.title + '">' + t.label + '</button>');
+        $btn.on('click', function(e) {
+          e.stopPropagation();
+          self._addItem(t.type, pos);
+          self._hidePopover();
+        });
+        $pop.append($btn);
+      })(types[i]);
+    }
+
+    // Position relative to container
+    var cRect = this.$container[0].getBoundingClientRect();
+    $pop.css({
+      left: (clientX - cRect.left) + 'px',
+      top:  (clientY - cRect.top - POPOVER_OFFSET_Y) + 'px'
+    });
+    this.$container.append($pop);
+    this._$popover = $pop;
+
+    // Close on outside click (delayed to avoid immediate trigger)
+    this._popoverCloseHandler = function(ev) {
+      if (!$(ev.target).closest('.msie-popover').length) {
+        self._popoverDismissedAt = Date.now();
+        self._hidePopover();
+      }
+    };
+    setTimeout(function() {
+      if (self._popoverCloseHandler) {
+        $(document).one('pointerdown', self._popoverCloseHandler);
+      }
+    }, 50);
+  };
+
+  proto._hidePopover = function() {
+    if (this._popoverCloseHandler) {
+      $(document).off('pointerdown', this._popoverCloseHandler);
+      this._popoverCloseHandler = null;
+    }
+    if (this._$popover) {
+      this._$popover.remove();
+      this._$popover = null;
+    }
+  };
+
+  // ── Item CRUD ────────────────────────────────────────────
+
+  proto._addItem = function(type, pos) {
+    var item = {
+      id: randomId(),
+      type: type,
+      x: pos.x,
+      y: pos.y
+    };
+    if (type === 'area') {
+      item.w = this.opts.areaDefaultWidth;
+      item.h = this.opts.areaDefaultHeight;
+      // Center the area on the click point
+      item.x -= item.w / 2;
+      item.y -= item.h / 2;
+    }
+    this.items.push(item);
+    this._selected = (type === 'area') ? item : null;
+    this._renderAll();
+    this._fire('onAdd', item);
+    return item;
+  };
+
+  proto._findItem = function(id) {
+    for (var i = 0; i < this.items.length; i++) {
+      if (this.items[i].id === id) return this.items[i];
+    }
+    return null;
+  };
+
+  proto._exportItem = function(item) {
+    var out = { id: item.id, type: item.type, x: item.x, y: item.y };
+    if (item.type === 'area') { out.w = item.w; out.h = item.h; }
+    if (item.color) out.color = item.color;
+    if (item.size) out.size = item.size;
+    if (item.fillColor) out.fillColor = item.fillColor;
+    if (item.strokeColor) out.strokeColor = item.strokeColor;
+    if (item.draggable !== undefined) out.draggable = item.draggable;
+    return out;
+  };
+
+  // ── Public API ───────────────────────────────────────────
+
+  /** Get all items as plain data array */
+  proto.getData = function() {
+    var out = [];
+    for (var i = 0; i < this.items.length; i++) {
+      out.push(this._exportItem(this.items[i]));
+    }
+    return out;
+  };
+
+  /** Set items from data array (replaces all) */
+  proto.setData = function(data) {
+    this.items = [];
+    this._selected = null;
+    if ($.isArray(data)) {
+      for (var i = 0; i < data.length; i++) {
+        var d = data[i];
+        if (!VALID_TYPES[d.type]) continue; // skip unknown types
+        this.items.push($.extend({}, d));
+      }
+    }
+    this._renderAll();
+    return this;
+  };
+
+  /** Add a single item programmatically */
+  proto.addItem = function(data) {
+    if (!VALID_TYPES[data.type]) return null; // unknown type guard
+    var item = $.extend({ id: randomId() }, data);
+    this.items.push(item);
+    this._renderAll();
+    return this._exportItem(item);
+  };
+
+  /** Remove an item by id */
+  proto.removeItem = function(id) {
+    for (var i = 0; i < this.items.length; i++) {
+      if (this.items[i].id === id) {
+        this.items.splice(i, 1);
+        if (this._selected && this._selected.id === id) this._selected = null;
+        this._renderAll();
+        return true;
+      }
+    }
+    return false;
+  };
+
+  /** Update an existing item's properties */
+  proto.updateItem = function(id, props) {
+    var item = this._findItem(id);
+    if (!item) return null;
+    var origType = item.type;
+    $.extend(item, props);
+    item.id = id;         // prevent id overwrite
+    item.type = origType; // prevent type change
+    this._renderAll();
+    return this._exportItem(item);
+  };
+
+  /** Destroy the editor and clean up */
+  proto.destroy = function() {
+    clearTimeout(this._clickTimer);
+    this._hidePopover();
+    var ns = '.msie';
+    this.$container.off(ns);
+    $(document).off(ns);
+    this.$container.removeClass('msie-container');
+    this.$wrap.remove();
+    this.$zoomIn.remove();
+    this.$zoomOut.remove();
+    this.$zoomFit.remove();
+    this.$container.removeData('mapSvgInfoEdit');
+  };
+
+  // ── jQuery plugin ────────────────────────────────────────
+
+  $.fn.mapSvgInfoEdit = function(optionsOrMethod) {
+    var args = Array.prototype.slice.call(arguments, 1);
+
+    // Method call
+    if (typeof optionsOrMethod === 'string') {
+      if (optionsOrMethod.charAt(0) === '_') return this; // block private methods
+      var ret;
+      this.each(function() {
+        var inst = $(this).data('mapSvgInfoEdit');
+        if (!inst) return;
+        if (typeof inst[optionsOrMethod] === 'function') {
+          ret = inst[optionsOrMethod].apply(inst, args);
+        }
+      });
+      return ret !== undefined ? ret : this;
+    }
+
+    // Init
+    return this.each(function() {
+      if (!$(this).data('mapSvgInfoEdit')) {
+        var inst = new MapSvgInfoEdit(this, optionsOrMethod);
+        $(this).data('mapSvgInfoEdit', inst);
+      }
+    });
+  };
+
+})(jQuery);

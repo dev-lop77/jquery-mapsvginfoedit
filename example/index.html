@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mapSvgInfoEdit — Demo</title>
+  <link rel="stylesheet" href="../jquery-mapsvginfoedit.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; background: #f0f0f0; padding: 20px; }
+    h1 { font-size: 20px; margin-bottom: 6px; color: #333; }
+    p.sub { font-size: 13px; color: #777; margin-bottom: 16px; }
+
+    #map-editor {
+      width: 820px;
+      height: 520px;
+      border: 1px solid #ccc;
+      background: #fff;
+    }
+
+    .controls {
+      margin-top: 14px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .controls button {
+      padding: 6px 14px;
+      border: 1px solid #aaa;
+      border-radius: 4px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .controls button:hover { background: #eee; }
+
+    #log {
+      margin-top: 14px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 10px;
+      border-radius: 4px;
+      max-height: 180px;
+      overflow-y: auto;
+      width: 820px;
+    }
+    #log div { margin-bottom: 2px; }
+    .log-event { color: #9cdcfe; }
+    .log-data  { color: #ce9178; }
+  </style>
+</head>
+<body>
+
+  <h1>jquery-mapsvginfoedit <span style="font-weight:normal;color:#999">v0.3.0</span></h1>
+  <p class="sub">Click empty space to add markers/areas &bull; Drag to pan &bull; Drag items to move &bull; Double-click area to resize</p>
+
+  <div id="map-editor" data-src="floorplan.svg"></div>
+
+  <div class="controls">
+    <button id="btn-get">getData()</button>
+    <button id="btn-clear">setData([])</button>
+    <button id="btn-load">Load sample data</button>
+    <button id="btn-zoom-fit">Fit to width</button>
+    <button id="btn-zoom-reset">Zoom 1:1</button>
+  </div>
+
+  <div id="log"><div style="color:#666">// event log</div></div>
+
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="../jquery-mapsvginfoedit.js"></script>
+  <script>
+    var $log = $('#log');
+    function log(event, data) {
+      var line = '<div><span class="log-event">' + event + '</span>';
+      if (data) line += '  <span class="log-data">' + JSON.stringify(data) + '</span>';
+      line += '</div>';
+      $log.append(line);
+      $log.scrollTop($log[0].scrollHeight);
+    }
+
+    // Initialise the editor
+    $('#map-editor').mapSvgInfoEdit({
+      markerSize: 18,
+      markerColor: '#e74c3c',
+      areaFillColor: 'rgba(52,152,219,0.25)',
+      areaStrokeColor: '#2980b9',
+      onClick: function(item) {
+        log('onClick', item);
+      },
+      onAdd: function(item) {
+        log('onAdd', item);
+      },
+      onModify: function(item) {
+        log('onModify', item);
+      }
+    });
+
+    // Sample data
+    var sampleData = [
+      { id: 's1', type: 'circle', x: 130, y: 68, color: '#27ae60' },
+      { id: 's2', type: 'square', x: 330, y: 92, color: '#e67e22' },
+      { id: 's3', type: 'pin',    x: 640, y: 200, color: '#8e44ad' },
+      { id: 's4', type: 'area',   x: 70, y: 245, w: 180, h: 80, fillColor: 'rgba(231,76,60,0.2)', strokeColor: '#c0392b' },
+      { id: 's5', type: 'circle', x: 590, y: 68 },
+      { id: 's6', type: 'area',   x: 570, y: 250, w: 160, h: 80 }
+    ];
+
+    // Controls
+    $('#btn-get').on('click', function() {
+      var data = $('#map-editor').mapSvgInfoEdit('getData');
+      log('getData()', data);
+    });
+
+    $('#btn-clear').on('click', function() {
+      $('#map-editor').mapSvgInfoEdit('setData', []);
+      log('setData([])');
+    });
+
+    $('#btn-load').on('click', function() {
+      $('#map-editor').mapSvgInfoEdit('setData', sampleData);
+      log('setData(sampleData)', sampleData.length + ' items');
+    });
+
+    $('#btn-zoom-fit').on('click', function() {
+      $('#map-editor').mapSvgInfoEdit('zoomFit');
+    });
+
+    $('#btn-zoom-reset').on('click', function() {
+      $('#map-editor').mapSvgInfoEdit('zoomTo', 1);
+    });
+  </script>
+
+</body>
+</html>
