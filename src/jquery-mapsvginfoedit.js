@@ -1,5 +1,5 @@
 /**
- * jquery-mapsvginfoedit v0.3.0
+ * jquery-mapsvginfoedit v0.5.0
  * Interactive SVG marker and area editor overlay for static images
  * (c) 2026 — MIT License
  */
@@ -12,6 +12,9 @@
     zoomMax: 4,
     zoomStep: 0.25,
     zoomInitial: 1,
+    pinchZoom: true,
+    wheelZoom: true,
+    wheelZoomStep: 0.1,
     // Markers
     markerSize: 20,
     markerColor: '#e74c3c',
@@ -70,6 +73,8 @@
     this._popoverDismissedAt = 0;
     this._popoverCloseHandler = null;
     this._clickTimer = null;
+    this._pointers = {};   // pointerId → {clientX, clientY}
+    this._pinch = null;    // active pinch state
     this._init();
   }
 
@@ -339,11 +344,65 @@
     var pointerDown = null; // {clientX, clientY, time, target}
     var ns = '.msie'; // event namespace
 
+    function pointerCount() {
+      var n = 0;
+      for (var k in self._pointers) {
+        if (self._pointers.hasOwnProperty(k)) n++;
+      }
+      return n;
+    }
+
+    function pointerIds() {
+      var ids = [];
+      for (var k in self._pointers) {
+        if (self._pointers.hasOwnProperty(k)) ids.push(k);
+      }
+      return ids;
+    }
+
+    function cancelSinglePointer() {
+      pointerDown = null;
+      self._panState = null;
+      self._itemDrag = null;
+      self._resize = null;
+      clearTimeout(self._clickTimer);
+    }
+
+    function startPinch() {
+      var ids = pointerIds();
+      var p1 = self._pointers[ids[0]];
+      var p2 = self._pointers[ids[1]];
+      var midX = (p1.clientX + p2.clientX) / 2;
+      var midY = (p1.clientY + p2.clientY) / 2;
+      var dx = p2.clientX - p1.clientX;
+      var dy = p2.clientY - p1.clientY;
+      var cRect = self.$container[0].getBoundingClientRect();
+      self._pinch = {
+        ids: [ids[0], ids[1]],
+        startDist: Math.sqrt(dx * dx + dy * dy) || 1,
+        startZoom: self.zoom,
+        anchorImgX: (midX - cRect.left - self.panX) / self.zoom,
+        anchorImgY: (midY - cRect.top  - self.panY) / self.zoom
+      };
+    }
+
     this.$container.on('pointerdown' + ns, function(e) {
       // Ignore zoom buttons
       if ($(e.target).hasClass('msie-zoom')) return;
 
       e.preventDefault();
+      self._pointers[e.pointerId] = { clientX: e.clientX, clientY: e.clientY };
+
+      // If pinch is already active, additional pointers are ignored
+      if (self._pinch) return;
+
+      // Second pointer arrived → enter pinch mode, cancel any single-pointer action
+      if (self.opts.pinchZoom && pointerCount() >= 2) {
+        cancelSinglePointer();
+        startPinch();
+        return;
+      }
+
       pointerDown = {
         clientX: e.clientX,
         clientY: e.clientY,
@@ -399,6 +458,35 @@
     });
 
     $(document).on('pointermove' + ns, function(e) {
+      if (self._pointers[e.pointerId]) {
+        self._pointers[e.pointerId].clientX = e.clientX;
+        self._pointers[e.pointerId].clientY = e.clientY;
+      }
+
+      // Pinch update
+      if (self._pinch) {
+        e.preventDefault();
+        var pp = self._pinch;
+        var p1 = self._pointers[pp.ids[0]];
+        var p2 = self._pointers[pp.ids[1]];
+        if (!p1 || !p2) return;
+        var pdx = p2.clientX - p1.clientX;
+        var pdy = p2.clientY - p1.clientY;
+        var curDist = Math.sqrt(pdx * pdx + pdy * pdy);
+        if (curDist < 1) return;
+        var midX = (p1.clientX + p2.clientX) / 2;
+        var midY = (p1.clientY + p2.clientY) / 2;
+        var newZoom = clamp(pp.startZoom * curDist / pp.startDist,
+                            self.opts.zoomMin, self.opts.zoomMax);
+        var cRect = self.$container[0].getBoundingClientRect();
+        self.zoom = newZoom;
+        self.panX = (midX - cRect.left) - pp.anchorImgX * newZoom;
+        self.panY = (midY - cRect.top)  - pp.anchorImgY * newZoom;
+        self._applyTransform();
+        if (self._selected) self._renderHandles(self._selected);
+        return;
+      }
+
       if (!pointerDown) return;
 
       // Resize
@@ -444,7 +532,20 @@
       }
     });
 
-    $(document).on('pointerup' + ns, function(e) {
+    $(document).on('pointerup' + ns + ' pointercancel' + ns, function(e) {
+      delete self._pointers[e.pointerId];
+
+      // Pinch end: clear and don't fall through to tap/pan logic.
+      // If still 2 pointers down (e.g. 3-finger → 2-finger), restart pinch.
+      if (self._pinch) {
+        self._pinch = null;
+        cancelSinglePointer();
+        if (self.opts.pinchZoom && pointerCount() >= 2) {
+          startPinch();
+        }
+        return;
+      }
+
       if (!pointerDown) return;
 
       // Resize end
@@ -517,6 +618,27 @@
         self._selected = item;
         self._renderAll();
       }
+    });
+
+    // Mouse wheel zoom (zoom-to-cursor)
+    this.$container.on('wheel' + ns, function(e) {
+      if (!self.opts.wheelZoom) return;
+      if ($(e.target).hasClass('msie-zoom')) return;
+      var oe = e.originalEvent;
+      if (!oe || !oe.deltaY) return;
+      e.preventDefault();
+      var step = self.opts.wheelZoomStep;
+      var factor = oe.deltaY < 0 ? (1 + step) : (1 - step);
+      var newZoom = clamp(self.zoom * factor, self.opts.zoomMin, self.opts.zoomMax);
+      if (newZoom === self.zoom) return;
+      var cRect = self.$container[0].getBoundingClientRect();
+      var anchorImgX = (oe.clientX - cRect.left - self.panX) / self.zoom;
+      var anchorImgY = (oe.clientY - cRect.top  - self.panY) / self.zoom;
+      self.zoom = newZoom;
+      self.panX = (oe.clientX - cRect.left) - anchorImgX * newZoom;
+      self.panY = (oe.clientY - cRect.top)  - anchorImgY * newZoom;
+      self._applyTransform();
+      if (self._selected) self._renderHandles(self._selected);
     });
 
     // Prevent context menu on long press
@@ -726,6 +848,8 @@
   proto.destroy = function() {
     clearTimeout(this._clickTimer);
     this._hidePopover();
+    this._pointers = {};
+    this._pinch = null;
     var ns = '.msie';
     this.$container.off(ns);
     $(document).off(ns);

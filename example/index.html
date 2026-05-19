@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>mapSvgInfoEdit — Demo</title>
-  <link rel="stylesheet" href="../jquery-mapsvginfoedit.css">
+  <link rel="stylesheet" href="../src/jquery-mapsvginfoedit.css">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: Arial, sans-serif; background: #f0f0f0; padding: 20px; }
@@ -54,8 +54,8 @@
 </head>
 <body>
 
-  <h1>jquery-mapsvginfoedit <span style="font-weight:normal;color:#999">v0.3.0</span></h1>
-  <p class="sub">Click empty space to add markers/areas &bull; Drag to pan &bull; Drag items to move &bull; Double-click area to resize</p>
+  <h1>jquery-mapsvginfoedit <span style="font-weight:normal;color:#999">v0.5.0</span></h1>
+  <p class="sub">Click empty space to add markers/areas &bull; Drag to pan &bull; Drag items to move &bull; Double-click area to resize &bull; Mouse wheel to zoom</p>
 
   <div id="map-editor" data-src="floorplan.svg"></div>
 
@@ -70,7 +70,7 @@
   <div id="log"><div style="color:#666">// event log</div></div>
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-  <script src="../jquery-mapsvginfoedit.js"></script>
+  <script src="../src/jquery-mapsvginfoedit.js"></script>
   <script>
     var $log = $('#log');
     function log(event, data) {

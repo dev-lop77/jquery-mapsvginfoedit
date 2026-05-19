@@ -27,6 +27,9 @@ Interactive SVG marker and area editor overlay for static images (warehouse layo
 | `zoomMax` | number | `4` | Maximum zoom level |
 | `zoomStep` | number | `0.25` | Zoom increment per click |
 | `zoomInitial` | number\|`'fit'` | `1` | Starting zoom level (`'fit'` = fit image to container width) |
+| `pinchZoom` | bool | `true` | Enable two-finger pinch-to-zoom on touch devices |
+| `wheelZoom` | bool | `true` | Enable mouse wheel zoom (anchors on cursor) |
+| `wheelZoomStep` | number | `0.1` | Fraction of zoom applied per wheel tick |
 | `markerSize` | number | `20` | Default marker radius/size (px in image coords) |
 | `markerColor` | string | `#e74c3c` | Default marker fill color |
 | `markerDraggable` | bool | `true` | Allow dragging markers |
@@ -106,7 +109,7 @@ Coordinates are always in **image-native pixels** — the library handles zoom/p
 - **Move**: click + drag (mouse) or long-press + drag (touch), 5px threshold
 - **Edit area**: double-click/double-tap an area → shows resize handles; click outside to exit edit mode
 - **Pan**: drag on empty space
-- **Zoom**: use the +/−/↔ buttons (top-right); ↔ fits image to container width
+- **Zoom**: use the +/−/↔ buttons (top-right), mouse wheel (anchors on cursor), or two-finger pinch on touch devices; ↔ fits image to container width
 - **Remove**: via API only (`removeItem(id)`)
 
 ## Browser Support

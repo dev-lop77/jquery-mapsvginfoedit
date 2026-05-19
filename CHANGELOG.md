@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0] — 2026-05-19
+
+### Added
+- Mouse wheel zoom with zoom-to-cursor anchoring (the image point under the cursor stays put)
+- `wheelZoom` option (default `true`) to enable/disable the gesture
+- `wheelZoomStep` option (default `0.1`) — fraction applied per wheel tick
+
+## [0.4.0] — 2026-05-15
+
+### Added
+- Two-finger pinch-to-zoom on touch devices, anchored to the midpoint between fingers
+- `pinchZoom` option (default `true`) to enable/disable the gesture
+
 ## [0.3.0] — 2026-03-23
 
 ### Changed
