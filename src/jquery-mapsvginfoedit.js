@@ -1,5 +1,5 @@
 /**
- * jquery-mapsvginfoedit v0.5.0
+ * jquery-mapsvginfoedit v0.6.1
  * Interactive SVG marker and area editor overlay for static images
  * (c) 2026 — MIT License
  */
@@ -29,6 +29,10 @@
     // Defaults for new areas placed via popover
     areaDefaultWidth: 80,
     areaDefaultHeight: 60,
+    // Toolbar — array of built-in type strings ('area','circle','square','pin')
+    // and/or custom entries: {type:'custom', name, svg, anchorX, anchorY}.
+    // null = show all 4 built-ins (default). Single entry skips the popover.
+    toolbar: null,
     // Callbacks
     onClick: null,   // function(item)
     onAdd: null,     // function(item)
@@ -39,7 +43,21 @@
   var DRAG_THRESHOLD = 5;
   var POPOVER_OFFSET_Y = 45;
   var SVG_NS = 'http://www.w3.org/2000/svg';
-  var VALID_TYPES = { circle: 1, square: 1, pin: 1, area: 1 };
+  var BUILTIN_TYPES = { circle: 1, square: 1, pin: 1, area: 1 };
+
+  var BUILTIN_ICONS = {
+    area:   '<svg viewBox="0 0 24 24" width="18" height="18" style="display:block"><rect x="3" y="5" width="18" height="14" rx="1" fill="none" stroke="#333" stroke-width="2"/></svg>',
+    circle: '<svg viewBox="0 0 24 24" width="18" height="18" style="display:block"><circle cx="12" cy="12" r="8" fill="#333"/></svg>',
+    square: '<svg viewBox="0 0 24 24" width="18" height="18" style="display:block"><rect x="4" y="4" width="16" height="16" fill="#333"/></svg>',
+    pin:    '<svg viewBox="0 0 24 24" width="20" height="20" style="display:block"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#e74c3c"/><circle cx="12" cy="9" r="2.5" fill="#fff"/></svg>'
+  };
+
+  var BUILTIN_TITLES = {
+    area: 'Rectangle area',
+    circle: 'Circle marker',
+    square: 'Square marker',
+    pin: 'Pin marker'
+  };
 
   // ── Helpers ──────────────────────────────────────────────
 
@@ -55,11 +73,54 @@
     while (node.firstChild) node.removeChild(node.firstChild);
   }
 
+  /**
+   * Parse an SVG string and return its root element. Uses the HTML parser
+   * (via a temporary div) so user-supplied SVG without an explicit
+   * xmlns="http://www.w3.org/2000/svg" still ends up in the SVG namespace.
+   */
+  function parseSvgString(str) {
+    if (!str || typeof str !== 'string') return null;
+    var temp = document.createElement('div');
+    temp.innerHTML = str;
+    return temp.firstElementChild;
+  }
+
+  /** Normalize the user's `toolbar` option into an array of validated entries. */
+  function normalizeToolbar(raw) {
+    if (raw === null || raw === undefined) {
+      return [{ type: 'area' }, { type: 'circle' }, { type: 'square' }, { type: 'pin' }];
+    }
+    if (!$.isArray(raw)) return [];
+    var out = [];
+    for (var i = 0; i < raw.length; i++) {
+      var e = raw[i];
+      if (typeof e === 'string') {
+        if (BUILTIN_TYPES[e]) out.push({ type: e });
+      } else if (e && e.type === 'custom' && e.name && e.svg) {
+        out.push({
+          type: 'custom',
+          name: e.name,
+          svg: e.svg,
+          anchorX: +e.anchorX || 0,
+          anchorY: +e.anchorY || 0
+        });
+      }
+    }
+    return out;
+  }
+
   // ── Constructor ──────────────────────────────────────────
 
   function MapSvgInfoEdit(container, options) {
     this.opts = $.extend({}, DEFAULTS, options);
     this.$container = $(container).addClass('msie-container');
+    this._toolbar = normalizeToolbar(this.opts.toolbar);
+    this._customByName = {};
+    for (var ti = 0; ti < this._toolbar.length; ti++) {
+      if (this._toolbar[ti].type === 'custom') {
+        this._customByName[this._toolbar[ti].name] = this._toolbar[ti];
+      }
+    }
     this.items = [];       // {id, type, x, y, [w, h]}  image-native coords
     this.zoom = (this.opts.zoomInitial === 'fit') ? 1 : this.opts.zoomInitial;
     this.panX = 0;
@@ -249,14 +310,38 @@
       dot.setAttribute('r', 2.5);
       dot.setAttribute('fill', '#fff');
       el.appendChild(dot);
+    } else if (item.type === 'custom') {
+      el = this._createCustomMarkerEl(item);
+      if (!el) return null;
     } else {
-      return null; // Q3: unknown type — skip silently
+      return null; // unknown type — skip silently
     }
 
     el.setAttribute('class', 'msie-marker');
     el.setAttribute('data-id', item.id);
     el.style.cursor = 'pointer';
     return el;
+  };
+
+  proto._createCustomMarkerEl = function(item) {
+    var entry = this._customByName[item.name];
+    if (!entry) return null;
+    var root = parseSvgString(entry.svg);
+    if (!root) return null;
+
+    var g = document.createElementNS(SVG_NS, 'g');
+    g.setAttribute('transform',
+      'translate(' + (item.x - entry.anchorX) + ',' + (item.y - entry.anchorY) + ')');
+
+    // If the user supplied a <svg> wrapper, move its element children; otherwise
+    // move the root itself. Snapshot first — appendChild mutates childNodes.
+    var src = (root.tagName.toLowerCase() === 'svg')
+      ? Array.prototype.slice.call(root.childNodes)
+      : [root];
+    for (var i = 0; i < src.length; i++) {
+      if (src[i].nodeType === 1) g.appendChild(src[i]);
+    }
+    return g;
   };
 
   /** Update an existing SVG element's position in-place (used during drag) */
@@ -275,6 +360,12 @@
       var scale = s / 12;
       el.setAttribute('transform',
         'translate(' + item.x + ',' + item.y + ') scale(' + scale + ')');
+    } else if (item.type === 'custom') {
+      var entry = this._customByName[item.name];
+      if (entry) {
+        el.setAttribute('transform',
+          'translate(' + (item.x - entry.anchorX) + ',' + (item.y - entry.anchorY) + ')');
+      }
     } else if (item.type === 'area') {
       el.setAttribute('x', item.x);
       el.setAttribute('y', item.y);
@@ -598,9 +689,13 @@
         self._selected = null;
         self._renderAll();
       } else if (!$(pointerDown.target).hasClass('msie-zoom') && !$(pointerDown.target).closest('.msie-popover').length) {
-        // Click on empty space (not in edit mode) → show add popover
+        // Click on empty space (not in edit mode) → add or show popover
         if (Date.now() - self._popoverDismissedAt > 200) {
-          self._showPopover(e.clientX, e.clientY);
+          if (self._toolbar.length === 1) {
+            self._addItem(self._toolbar[0], self._toImage(e.clientX, e.clientY));
+          } else if (self._toolbar.length > 1) {
+            self._showPopover(e.clientX, e.clientY);
+          }
         }
       }
 
@@ -682,31 +777,26 @@
   proto._showPopover = function(clientX, clientY) {
     this._hidePopover();
     if (!this.svg) return;
+    if (!this._toolbar.length) return;
 
     var self = this;
     var pos = this._toImage(clientX, clientY);
 
     var $pop = $('<div class="msie-popover"></div>');
-    var pinSvg = '<svg viewBox="0 0 24 24" width="20" height="20" style="display:block">' +
-      '<path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#e74c3c"/>' +
-      '<circle cx="12" cy="9" r="2.5" fill="#fff"/></svg>';
-    var types = [
-      { type: 'area',   label: '<svg viewBox="0 0 24 24" width="18" height="18" style="display:block"><rect x="3" y="5" width="18" height="14" rx="1" fill="none" stroke="#333" stroke-width="2"/></svg>', title: 'Rectangle area' },
-      { type: 'circle', label: '<svg viewBox="0 0 24 24" width="18" height="18" style="display:block"><circle cx="12" cy="12" r="8" fill="#333"/></svg>', title: 'Circle marker'  },
-      { type: 'square', label: '<svg viewBox="0 0 24 24" width="18" height="18" style="display:block"><rect x="4" y="4" width="16" height="16" fill="#333"/></svg>', title: 'Square marker'  },
-      { type: 'pin',    label: pinSvg, title: 'Pin marker' }
-    ];
-
-    for (var i = 0; i < types.length; i++) {
-      (function(t) {
-        var $btn = $('<button type="button" class="msie-pop-btn" title="' + t.title + '">' + t.label + '</button>');
+    for (var i = 0; i < this._toolbar.length; i++) {
+      (function(entry) {
+        var icon  = (entry.type === 'custom') ? entry.svg : BUILTIN_ICONS[entry.type];
+        var title = (entry.type === 'custom') ? entry.name : BUILTIN_TITLES[entry.type];
+        var $btn = $('<button type="button" class="msie-pop-btn"></button>')
+          .attr('title', title)
+          .html(icon);
         $btn.on('click', function(e) {
           e.stopPropagation();
-          self._addItem(t.type, pos);
+          self._addItem(entry, pos);
           self._hidePopover();
         });
         $pop.append($btn);
-      })(types[i]);
+      })(this._toolbar[i]);
     }
 
     // Position relative to container
@@ -745,14 +835,16 @@
 
   // ── Item CRUD ────────────────────────────────────────────
 
-  proto._addItem = function(type, pos) {
+  proto._addItem = function(entry, pos) {
     var item = {
       id: randomId(),
-      type: type,
+      type: entry.type,
       x: pos.x,
       y: pos.y
     };
-    if (type === 'area') {
+    if (entry.type === 'custom') {
+      item.name = entry.name;
+    } else if (entry.type === 'area') {
       item.w = this.opts.areaDefaultWidth;
       item.h = this.opts.areaDefaultHeight;
       // Center the area on the click point
@@ -760,7 +852,7 @@
       item.y -= item.h / 2;
     }
     this.items.push(item);
-    this._selected = (type === 'area') ? item : null;
+    this._selected = (entry.type === 'area') ? item : null;
     this._renderAll();
     this._fire('onAdd', item);
     return item;
@@ -776,12 +868,21 @@
   proto._exportItem = function(item) {
     var out = { id: item.id, type: item.type, x: item.x, y: item.y };
     if (item.type === 'area') { out.w = item.w; out.h = item.h; }
+    if (item.type === 'custom') out.name = item.name;
     if (item.color) out.color = item.color;
     if (item.size) out.size = item.size;
     if (item.fillColor) out.fillColor = item.fillColor;
     if (item.strokeColor) out.strokeColor = item.strokeColor;
     if (item.draggable !== undefined) out.draggable = item.draggable;
     return out;
+  };
+
+  /** Validate a data object before adding/loading it as an item. */
+  proto._isValidItemData = function(d) {
+    if (!d || !d.type) return false;
+    if (BUILTIN_TYPES[d.type]) return true;
+    if (d.type === 'custom' && d.name && this._customByName[d.name]) return true;
+    return false;
   };
 
   // ── Public API ───────────────────────────────────────────
@@ -802,7 +903,7 @@
     if ($.isArray(data)) {
       for (var i = 0; i < data.length; i++) {
         var d = data[i];
-        if (!VALID_TYPES[d.type]) continue; // skip unknown types
+        if (!this._isValidItemData(d)) continue;
         this.items.push($.extend({}, d));
       }
     }
@@ -812,7 +913,7 @@
 
   /** Add a single item programmatically */
   proto.addItem = function(data) {
-    if (!VALID_TYPES[data.type]) return null; // unknown type guard
+    if (!this._isValidItemData(data)) return null;
     var item = $.extend({ id: randomId() }, data);
     this.items.push(item);
     this._renderAll();

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.1] — 2026-05-27
+
+### Fixed
+- Custom SVG markers were invisible on the map when the user-supplied SVG string omitted `xmlns="http://www.w3.org/2000/svg"`. `parseSvgString()` now uses the HTML parser (via a temporary div) so children end up in the SVG namespace regardless of the xmlns declaration.
+
+## [0.6.0] — 2026-05-27
+
+### Added
+- `toolbar` option to configure which marker types appear in the add-item popover; accepts an ordered array of built-in type strings (`'area'`, `'circle'`, `'square'`, `'pin'`) and/or custom entries
+- Custom SVG markers via `{type:'custom', name, svg, anchorX, anchorY}` toolbar entries — raw SVG is rendered as both the toolbar icon and the marker on the map, with `anchorX`/`anchorY` aligning a point inside the SVG to the tap position
+- Single-entry shortcut: when `toolbar` has exactly one entry, tapping empty space places that item directly without showing the popover
+- Custom markers are draggable, exported by `getData()` (with `type:'custom'` and `name`), and re-rendered by `setData()`
+
 ## [0.5.0] — 2026-05-19
 
 ### Added

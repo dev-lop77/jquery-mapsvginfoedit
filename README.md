@@ -41,6 +41,7 @@ Interactive SVG marker and area editor overlay for static images (warehouse layo
 | `areaResizable` | bool | `true` | Show resize handles on selected areas |
 | `areaDefaultWidth` | number | `80` | Width of newly created areas |
 | `areaDefaultHeight` | number | `60` | Height of newly created areas |
+| `toolbar` | array\|null | `null` | Configures the add-item popover. `null` = show all 4 built-ins. See [Toolbar config](#toolbar-config) below. |
 
 ### Callbacks
 
@@ -89,22 +90,52 @@ Each item is a plain object:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `id` | string | auto-generated | Unique identifier |
-| `type` | string | yes | `circle`, `square`, `pin`, or `area` |
+| `type` | string | yes | `circle`, `square`, `pin`, `area`, or `custom` |
+| `name` | string | custom only | Name of the custom toolbar entry this item refers to |
 | `x` | number | yes | X position (image-native px) |
 | `y` | number | yes | Y position (image-native px) |
 | `w` | number | areas only | Width |
 | `h` | number | areas only | Height |
-| `color` | string | no | Override marker color |
-| `size` | number | no | Override marker size |
+| `color` | string | no | Override marker color (built-ins only) |
+| `size` | number | no | Override marker size (built-ins only) |
 | `fillColor` | string | no | Override area fill |
 | `strokeColor` | string | no | Override area stroke |
 | `draggable` | bool | no | Override per-item draggable flag |
 
 Coordinates are always in **image-native pixels** — the library handles zoom/pan translation internally.
 
+## Toolbar Config
+
+The `toolbar` option controls which items the popover offers and in what order. It accepts an array whose entries are either built-in type strings or custom-marker objects.
+
+```js
+$('#map').mapSvgInfoEdit({
+  toolbar: [
+    'area',
+    'circle',
+    {
+      type:    'custom',
+      name:    'star',                // unique name (used in stored data)
+      svg:     '<svg viewBox="-12 -12 24 24" width="24" height="24">' +
+               '<polygon points="0,-10 2.9,-3.1 10,-3.1 4.1,1.4 6.2,9 0,4.7 -6.2,9 -4.1,1.4 -10,-3.1 -2.9,-3.1" fill="#f1c40f" stroke="#b9890b" stroke-width="1"/>' +
+               '</svg>',
+      anchorX: 0,                     // anchor coords inside the SVG —
+      anchorY: 0                      // this point lands on the tap position
+    }
+  ]
+});
+```
+
+Notes:
+- **Order matters** — toolbar icons appear in the order listed.
+- **Single entry** — if the array has exactly one entry, the popover is skipped and that type is placed immediately on tap.
+- **SVG wrapper required** — supply a full `<svg>…</svg>` element. The wrapper's `width`/`height` size the toolbar icon; the marker on the map renders the wrapper's children translated so the anchor lands at the click point, so design your shape in the SVG's coordinate space.
+- **Custom markers store `type:'custom'` and `name`** — `getData()` returns them with these fields, and `setData()` re-renders them by looking up `name` in the toolbar config (re-initialize with the same `toolbar` to round-trip).
+- Custom markers ignore `markerColor`/`markerSize` — styling comes from the SVG itself.
+
 ## Interaction
 
-- **Add**: click/tap empty space → popover with shape icons
+- **Add**: click/tap empty space → popover with shape icons (or direct placement when the toolbar has a single entry)
 - **Select**: click/tap an existing item → fires `onClick` (markers immediately, areas with 250ms debounce)
 - **Move**: click + drag (mouse) or long-press + drag (touch), 5px threshold
 - **Edit area**: double-click/double-tap an area → shows resize handles; click outside to exit edit mode

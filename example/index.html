@@ -54,7 +54,7 @@
 </head>
 <body>
 
-  <h1>jquery-mapsvginfoedit <span style="font-weight:normal;color:#999">v0.5.0</span></h1>
+  <h1>jquery-mapsvginfoedit <span style="font-weight:normal;color:#999">v0.6.1</span></h1>
   <p class="sub">Click empty space to add markers/areas &bull; Drag to pan &bull; Drag items to move &bull; Double-click area to resize &bull; Mouse wheel to zoom</p>
 
   <div id="map-editor" data-src="floorplan.svg"></div>
@@ -81,12 +81,26 @@
       $log.scrollTop($log[0].scrollHeight);
     }
 
+    // Custom SVG marker — a yellow star (anchor at center, 0,0)
+    var starSvg =
+      '<svg viewBox="-12 -12 24 24" width="22" height="22">' +
+      '<polygon points="0,-10 2.9,-3.1 10,-3.1 4.1,1.4 6.2,9 0,4.7 -6.2,9 -4.1,1.4 -10,-3.1 -2.9,-3.1" ' +
+      'fill="#f1c40f" stroke="#b9890b" stroke-width="1" stroke-linejoin="round"/>' +
+      '</svg>';
+
     // Initialise the editor
     $('#map-editor').mapSvgInfoEdit({
       markerSize: 18,
       markerColor: '#e74c3c',
       areaFillColor: 'rgba(52,152,219,0.25)',
       areaStrokeColor: '#2980b9',
+      toolbar: [
+        'area',
+        'circle',
+        'square',
+        'pin',
+        { type: 'custom', name: 'star', svg: starSvg, anchorX: 0, anchorY: 0 }
+      ],
       onClick: function(item) {
         log('onClick', item);
       },
@@ -105,7 +119,8 @@
       { id: 's3', type: 'pin',    x: 640, y: 200, color: '#8e44ad' },
       { id: 's4', type: 'area',   x: 70, y: 245, w: 180, h: 80, fillColor: 'rgba(231,76,60,0.2)', strokeColor: '#c0392b' },
       { id: 's5', type: 'circle', x: 590, y: 68 },
-      { id: 's6', type: 'area',   x: 570, y: 250, w: 160, h: 80 }
+      { id: 's6', type: 'area',   x: 570, y: 250, w: 160, h: 80 },
+      { id: 's7', type: 'custom', name: 'star', x: 430, y: 180 }
     ];
 
     // Controls
