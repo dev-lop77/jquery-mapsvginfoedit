@@ -1,5 +1,5 @@
 /**
- * jquery-mapsvginfoedit v0.6.1
+ * jquery-mapsvginfoedit v0.6.2
  * Interactive SVG marker and area editor overlay for static images
  * (c) 2026 — MIT License
  */
@@ -210,9 +210,10 @@
 
   /** Screen (client) coords → image-native coords */
   proto._toImage = function(clientX, clientY) {
-    var rect = this.$wrap[0].getBoundingClientRect();
-    var sx = (clientX - rect.left) / this.zoom - this.panX / this.zoom;
-    var sy = (clientY - rect.top)  / this.zoom - this.panY / this.zoom;
+    // Use container rect (untransformed); $wrap's rect already includes pan.
+    var rect = this.$container[0].getBoundingClientRect();
+    var sx = (clientX - rect.left - this.panX) / this.zoom;
+    var sy = (clientY - rect.top  - this.panY) / this.zoom;
     return { x: sx, y: sy };
   };
 

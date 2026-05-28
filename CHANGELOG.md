@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.2] — 2026-05-28
+
+### Fixed
+- New markers placed by tapping empty space were positioned incorrectly after any pinch-zoom, wheel-zoom or drag-pan. `_toImage()` used `$wrap.getBoundingClientRect()` (which already reflects the post-transform pan) and then subtracted `panX/panY` a second time, shifting the placement by `pan/zoom`. Now uses the untransformed `$container` rect with a single pan subtraction, matching the formula already used by the pinch and wheel handlers.
+
 ## [0.6.1] — 2026-05-27
 
 ### Fixed
